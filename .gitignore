@@ -4,3 +4,27 @@ __pycache__/
 .venv/
 *.db
 .env
+
+# Arquivos .env locais (o modelo .env.example continua versionado)
+.env.*
+!.env.example
+
+# Arquivos temporários e variações do SQLite
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Ambientes virtuais
+venv/
+env/
+.venv*/
+venv*/
+
+# Caches e relatórios de ferramentas
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/

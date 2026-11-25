@@ -1,0 +1,3 @@
+# O gerador só usa a biblioteca padrão do Python: estas dependências são apenas para os testes
+pytest==9.2.0
+pip-audit==2.10.1

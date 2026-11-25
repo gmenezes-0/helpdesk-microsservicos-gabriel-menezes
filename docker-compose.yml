@@ -1,22 +1,128 @@
+# HelpDesk TI em microsserviços.
+# Uso: docker compose up --build   →   http://localhost:8000
+#
+# Ordem de subida:
+#   segredo-jwt (roda uma vez e termina) → usuarios + inventario (saudáveis) → chamados (saudável) → gateway
+#
+# Redes:
+#   borda   : só o gateway; é por ela que a porta 8000 chega do computador
+#   interna : gateway e serviços; "internal" = sem saída para a internet e sem portas publicadas
+#
+# Volumes: cada serviço tem o seu banco; o segredo JWT fica num volume próprio,
+# montado só para leitura nos três serviços. O gateway não monta nenhum volume.
+name: helpdesk
+
+# Proteções comuns a todos os contêineres
+x-protegido: &protegido
+  read_only: true
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+
+# Comum aos três serviços de negócio
+x-servico: &servico
+  <<: *protegido
+  restart: unless-stopped
+  tmpfs:
+    - /tmp:size=16m,mode=1777,noexec,nosuid,nodev   # arquivos temporários do SQLite
+  networks:
+    - interna
+
+# Variáveis comuns aos três serviços (nenhuma delas é segredo)
+x-ambiente: &ambiente
+  JWT_SEGREDO_ARQUIVO: /segredos/jwt
+  DADOS_EXEMPLO: ${DADOS_EXEMPLO:-1}
+  DOCS: ${DOCS:-1}
+  # Só o gateway pode informar o endereço do cliente em X-Forwarded-For
+  FORWARDED_ALLOW_IPS: ${GATEWAY_IP_INTERNO:-172.30.80.10}
+
 services:
-  helpdesk:
-    build: .
-    ports:
-      - "127.0.0.1:8000:8000"   # só acessível pelo próprio computador
-    env_file:
-      - path: .env
-        required: false
-    environment:
-      DADOS_EXEMPLO: ${DADOS_EXEMPLO:-1}
+  segredo-jwt:
+    build: ./infra/segredo-jwt
+    <<: *protegido
+    restart: "no"
+    network_mode: none            # não precisa de rede
     volumes:
-      - dados:/dados
-    read_only: true
-    tmpfs:
-      - /tmp
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
+      - jwt-segredo:/segredos
+
+  usuarios:
+    build: ./servicos/usuarios
+    <<: *servico
+    environment:
+      <<: *ambiente
+      TOKEN_MINUTOS: ${TOKEN_MINUTOS:-60}
+      SENHA_EXEMPLO: ${SENHA_EXEMPLO:-Helpdesk2026}   # senha pública das contas de exemplo
+    volumes:
+      - usuarios-dados:/dados
+      - jwt-segredo:/segredos:ro
+    depends_on:
+      segredo-jwt:
+        condition: service_completed_successfully
+
+  inventario:
+    build: ./servicos/inventario
+    <<: *servico
+    environment:
+      <<: *ambiente
+    volumes:
+      - inventario-dados:/dados
+      - jwt-segredo:/segredos:ro
+    depends_on:
+      segredo-jwt:
+        condition: service_completed_successfully
+
+  chamados:
+    build: ./servicos/chamados
+    <<: *servico
+    environment:
+      <<: *ambiente
+      USUARIOS_URL: http://usuarios:8000
+      INVENTARIO_URL: http://inventario:8000
+    volumes:
+      - chamados-dados:/dados
+      - jwt-segredo:/segredos:ro
+    depends_on:
+      segredo-jwt:
+        condition: service_completed_successfully
+      usuarios:
+        condition: service_healthy
+      inventario:
+        condition: service_healthy
+
+  gateway:
+    build: ./gateway
+    <<: *protegido
+    restart: unless-stopped
+    environment:
+      USUARIOS_URL: http://usuarios:8000
+      INVENTARIO_URL: http://inventario:8000
+      CHAMADOS_URL: http://chamados:8000
+      DOCS: ${DOCS:-1}
+    ports:
+      - "127.0.0.1:8000:8000"     # a única porta publicada, e só para o próprio computador
+    networks:
+      borda: {}
+      interna:
+        ipv4_address: ${GATEWAY_IP_INTERNO:-172.30.80.10}
+    depends_on:
+      usuarios:
+        condition: service_healthy
+      inventario:
+        condition: service_healthy
+      chamados:
+        condition: service_healthy
+
+networks:
+  borda: {}
+  interna:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${REDE_INTERNA_SUBREDE:-172.30.80.0/24}
 
 volumes:
-  dados:
+  usuarios-dados:
+  inventario-dados:
+  chamados-dados:
+  jwt-segredo:

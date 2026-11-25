@@ -1,0 +1,27 @@
+# Versão monolítica original, mantida para comparação.
+# Uso: docker compose -f docker-compose.monolito.yml up --build
+# (usa a mesma porta 8000: pare a versão em microsserviços antes)
+name: helpdesk-monolito
+
+services:
+  helpdesk:
+    build: .
+    ports:
+      - "127.0.0.1:8000:8000"   # só acessível pelo próprio computador
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DADOS_EXEMPLO: ${DADOS_EXEMPLO:-1}
+    volumes:
+      - dados:/dados
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  dados:
