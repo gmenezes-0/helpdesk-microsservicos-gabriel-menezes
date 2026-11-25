@@ -15,10 +15,11 @@ SERVICOS = {
     "usuarios": os.getenv("USUARIOS_URL", "http://usuarios:8000").rstrip("/"),
     "inventario": os.getenv("INVENTARIO_URL", "http://inventario:8000").rstrip("/"),
     "chamados": os.getenv("CHAMADOS_URL", "http://chamados:8000").rstrip("/"),
+    "notificacoes": os.getenv("NOTIFICACOES_URL", "http://notificacoes:8000").rstrip("/"),
 }
 
 # Nome de cada serviço nas mensagens de erro
-NOMES = {"usuarios": "usuários", "inventario": "inventário", "chamados": "chamados"}
+NOMES = {"usuarios": "usuários", "inventario": "inventário", "chamados": "chamados", "notificacoes": "notificações"}
 
 # Qual serviço atende cada prefixo de rota
 ROTAS = {
@@ -26,7 +27,7 @@ ROTAS = {
     "/usuarios": "usuarios",
     "/ativos": "inventario",
     "/chamados": "chamados",
-    "/notificacoes": "chamados",
+    "/notificacoes": "notificacoes",
 }
 
 # Tempo limite para repassar uma requisição. Fica acima do tempo limite que o serviço

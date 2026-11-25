@@ -58,3 +58,11 @@ def test_openapi_sem_um_servico_lista_os_outros(cliente, servicos):
     doc = cliente.get("/openapi.json").json()
     assert "/ativos" not in doc["paths"] and "/chamados" in doc["paths"] and "/auth/login" in doc["paths"]
     assert "inventario" in doc["info"]["description"]
+
+
+def test_openapi_inclui_o_servico_de_notificacoes(cliente, servicos):
+    doc = cliente.get("/openapi.json").json()
+    assert "/notificacoes" in doc["paths"] and "NotificacaoSaida" in doc["components"]["schemas"]
+    servicos.falha["notificacoes.teste"] = "conexao"
+    doc = cliente.get("/openapi.json").json()
+    assert "/notificacoes" not in doc["paths"] and "/chamados" in doc["paths"]

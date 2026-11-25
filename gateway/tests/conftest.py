@@ -4,6 +4,7 @@ import os
 os.environ["USUARIOS_URL"] = "http://usuarios.teste"
 os.environ["INVENTARIO_URL"] = "http://inventario.teste"
 os.environ["CHAMADOS_URL"] = "http://chamados.teste"
+os.environ["NOTIFICACOES_URL"] = "http://notificacoes.teste"
 os.environ["DOCS"] = "1"
 
 import httpx  # noqa: E402
@@ -35,14 +36,16 @@ ESPECIFICACOES = {
         "/ativos": {"get": {"summary": "Listar Ativos"}}, "/ativos/{ativo_id}": {"get": {"summary": "Obter Ativo"}}},
         {"AtivoSaida": {"type": "object"}}),
     "chamados.teste": especificacao("Chamados", {
-        "/chamados": {"get": {"summary": "Listar Chamados"}}, "/chamados/painel": {"get": {"summary": "Painel"}},
-        "/notificacoes": {"get": {"summary": "Minhas Notificacoes"}}},
+        "/chamados": {"get": {"summary": "Listar Chamados"}}, "/chamados/painel": {"get": {"summary": "Painel"}}},
         {"ChamadoSaida": {"type": "object"}}),
+    "notificacoes.teste": especificacao("Notificações", {
+        "/notificacoes": {"get": {"summary": "Minhas Notificacoes"}}},
+        {"NotificacaoSaida": {"type": "object"}}),
 }
 
 
 class ServicosSimulados:
-    """Faz o papel dos três serviços nos testes.
+    """Faz o papel dos quatro serviços nos testes.
 
     Por padrão, cada um devolve um "eco" do que recebeu. Pode simular, por serviço:
     "timeout", "conexao", ou uma resposta pronta (httpx.Response) em `resposta`.

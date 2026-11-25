@@ -23,7 +23,7 @@ ROTAS = [
     ("PATCH", "/chamados/7/atribuir", "chamados"),
     ("PATCH", "/chamados/7/status", "chamados"),
     ("POST", "/chamados/7/comentarios", "chamados"),
-    ("GET", "/notificacoes", "chamados"),
+    ("GET", "/notificacoes", "notificacoes"),
 ]
 
 
