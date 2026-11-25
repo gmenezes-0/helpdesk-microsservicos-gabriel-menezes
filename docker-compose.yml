@@ -2,14 +2,17 @@
 # Uso: docker compose up --build   →   http://localhost:8000
 #
 # Ordem de subida:
-#   segredo-jwt (roda uma vez e termina) → usuarios + inventario (saudáveis) → chamados (saudável) → gateway
+#   segredo-jwt (roda uma vez e termina) → rabbitmq, usuarios + inventario (saudáveis)
+#   → chamados e notificacoes (saudáveis) → gateway
+#   O Chamados NÃO espera o RabbitMQ: os eventos ficam na caixa de saída até o broker responder.
 #
 # Redes:
 #   borda   : só o gateway; é por ela que a porta 8000 chega do computador
-#   interna : gateway e serviços; "internal" = sem saída para a internet e sem portas publicadas
+#   interna : gateway, serviços e RabbitMQ; "internal" = sem saída para a internet e sem portas publicadas
 #
-# Volumes: cada serviço tem o seu banco; o segredo JWT fica num volume próprio,
-# montado só para leitura nos três serviços. O gateway não monta nenhum volume.
+# Volumes: cada serviço tem o seu banco; o segredo JWT e as credenciais do RabbitMQ ficam em
+# volumes próprios, montados só para leitura. Cada serviço monta só a sua credencial do broker
+# (subpasta do volume). O gateway não monta nenhum volume.
 name: helpdesk
 
 # Proteções comuns a todos os contêineres
@@ -20,7 +23,7 @@ x-protegido: &protegido
   security_opt:
     - no-new-privileges:true
 
-# Comum aos três serviços de negócio
+# Comum aos serviços de negócio
 x-servico: &servico
   <<: *protegido
   restart: unless-stopped
@@ -29,7 +32,7 @@ x-servico: &servico
   networks:
     - interna
 
-# Variáveis comuns aos três serviços (nenhuma delas é segredo)
+# Variáveis comuns aos serviços (nenhuma delas é segredo)
 x-ambiente: &ambiente
   JWT_SEGREDO_ARQUIVO: /segredos/jwt
   DADOS_EXEMPLO: ${DADOS_EXEMPLO:-1}
@@ -37,14 +40,43 @@ x-ambiente: &ambiente
   # Só o gateway pode informar o endereço do cliente em X-Forwarded-For
   FORWARDED_ALLOW_IPS: ${GATEWAY_IP_INTERNO:-172.30.80.10}
 
+# Cliente do RabbitMQ: a senha vem de um arquivo (volume só leitura), nunca do ambiente
+x-rabbitmq-cliente: &rabbitmq-cliente
+  RABBITMQ_HOST: rabbitmq
+  RABBITMQ_SENHA_ARQUIVO: /run/rabbitmq/senha
+
 services:
   segredo-jwt:
     build: ./infra/segredo-jwt
     <<: *protegido
     restart: "no"
     network_mode: none            # não precisa de rede
+    environment:
+      MQ_SEGREDOS_PASTA: /mq-segredos   # também gera as credenciais e definições do RabbitMQ
     volumes:
       - jwt-segredo:/segredos
+      - mq-segredos:/mq-segredos
+
+  rabbitmq:
+    build: ./infra/rabbitmq       # 4.4.1-alpine fixado por digest; sem root, sem plugins, Erlang só no localhost
+    <<: *protegido
+    restart: unless-stopped
+    hostname: rabbitmq
+    tmpfs:
+      - /tmp:size=32m,mode=1777,noexec,nosuid,nodev
+    volumes:
+      - rabbitmq-dados:/var/lib/rabbitmq
+      - type: volume                # só as definições (hashes); nenhuma senha de cliente
+        source: mq-segredos
+        target: /etc/rabbitmq/definicoes
+        read_only: true
+        volume:
+          subpath: rabbitmq
+    networks:
+      - interna
+    depends_on:
+      segredo-jwt:
+        condition: service_completed_successfully
 
   usuarios:
     build: ./servicos/usuarios
@@ -76,19 +108,43 @@ services:
     build: ./servicos/chamados
     <<: *servico
     environment:
-      <<: *ambiente
+      <<: [*ambiente, *rabbitmq-cliente]
       USUARIOS_URL: http://usuarios:8000
       INVENTARIO_URL: http://inventario:8000
     volumes:
       - chamados-dados:/dados
       - jwt-segredo:/segredos:ro
-    depends_on:
+      - type: volume                # só a senha do usuário "chamados" do broker
+        source: mq-segredos
+        target: /run/rabbitmq
+        read_only: true
+        volume:
+          subpath: chamados
+    depends_on:                   # sem dependência do rabbitmq, de propósito
       segredo-jwt:
         condition: service_completed_successfully
       usuarios:
         condition: service_healthy
       inventario:
         condition: service_healthy
+
+  notificacoes:
+    build: ./servicos/notificacoes
+    <<: *servico
+    environment:
+      <<: [*ambiente, *rabbitmq-cliente]
+    volumes:
+      - notificacoes-dados:/dados
+      - jwt-segredo:/segredos:ro
+      - type: volume                # só a senha do usuário "notificacoes" do broker
+        source: mq-segredos
+        target: /run/rabbitmq
+        read_only: true
+        volume:
+          subpath: notificacoes
+    depends_on:                   # o consumidor reconecta sozinho: também não espera o rabbitmq
+      segredo-jwt:
+        condition: service_completed_successfully
 
   gateway:
     build: ./gateway
@@ -98,6 +154,7 @@ services:
       USUARIOS_URL: http://usuarios:8000
       INVENTARIO_URL: http://inventario:8000
       CHAMADOS_URL: http://chamados:8000
+      NOTIFICACOES_URL: http://notificacoes:8000
       DOCS: ${DOCS:-1}
     ports:
       - "127.0.0.1:8000:8000"     # a única porta publicada, e só para o próprio computador
@@ -112,6 +169,8 @@ services:
         condition: service_healthy
       chamados:
         condition: service_healthy
+      notificacoes:
+        condition: service_healthy
 
 networks:
   borda: {}
@@ -125,4 +184,7 @@ volumes:
   usuarios-dados:
   inventario-dados:
   chamados-dados:
+  notificacoes-dados:
   jwt-segredo:
+  mq-segredos:
+  rabbitmq-dados:
