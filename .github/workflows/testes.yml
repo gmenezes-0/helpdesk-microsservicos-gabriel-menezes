@@ -22,6 +22,8 @@ jobs:
             pasta: servicos/inventario
           - projeto: chamados
             pasta: servicos/chamados
+          - projeto: notificacoes
+            pasta: servicos/notificacoes
           - projeto: gateway
             pasta: gateway
           - projeto: segredo-jwt
@@ -59,13 +61,17 @@ jobs:
           persist-credentials: false
       - name: Configuração válida
         run: docker compose config --quiet
+      - name: Imagem do RabbitMQ fixada por digest
+        run: grep -Eq '^FROM rabbitmq:4\.4\.1-alpine@sha256:[0-9a-f]{64}$' infra/rabbitmq/Dockerfile
       - name: Subir tudo
-        run: docker compose up --build --detach --wait --wait-timeout 180
+        run: docker compose up --build --detach --wait --wait-timeout 240
       - name: Conferir pelo gateway
         run: |
           set -eu
           curl -fsS http://127.0.0.1:8000/saude | tee /dev/stderr | grep -q '"status":"ok"'
+          curl -fsS http://127.0.0.1:8000/saude | grep -q '"notificacoes":"ok"'
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/chamados)" = 401
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/notificacoes)" = 401
           TOKEN=$(curl -fsS -X POST http://127.0.0.1:8000/auth/login -H 'Content-Type: application/json' \
             -d '{"email":"carla@empresa.com","senha":"Helpdesk2026"}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
           curl -fsS http://127.0.0.1:8000/chamados -H "Authorization: Bearer $TOKEN" > /dev/null
@@ -73,6 +79,32 @@ jobs:
           # Só o gateway publica porta
           test "$(docker compose ps --format '{{.Service}} {{.Ports}}' | grep -c -- '->')" = 1
           docker compose ps --format '{{.Service}} {{.Ports}}' | grep -- '->' | grep -q '^gateway 127.0.0.1:8000->8000/tcp'
+      - name: Entrega real de uma notificação (Chamados → RabbitMQ → Notificações)
+        run: |
+          set -eu
+          TOKEN=$(curl -fsS -X POST http://127.0.0.1:8000/auth/login -H 'Content-Type: application/json' \
+            -d '{"email":"carla@empresa.com","senha":"Helpdesk2026"}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+          ID=$(curl -fsS -X POST http://127.0.0.1:8000/chamados -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+            -d '{"titulo":"Teste do CI","descricao":"Evento ponta a ponta","prioridade":"baixa"}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8000/notificacoes -H "Authorization: Bearer $TOKEN" | grep -q "Seu chamado #$ID foi aberto"; then
+              echo "Aviso do chamado #$ID entregue em ${i}s"; exit 0
+            fi
+            sleep 1
+          done
+          echo "O aviso do chamado #$ID não chegou em 60 s"; exit 1
+      - name: RabbitMQ endurecido
+        run: |
+          set -eu
+          # só os dois usuários gerados (sem guest e sem administrador)
+          test "$(docker compose exec -T rabbitmq rabbitmqctl -q list_users | tail -n +2 | sort | tr -s '\t ' ' ')" = "$(printf 'chamados []\nnotificacoes []')"
+          # nenhum plugin ligado (nem painel, nem métricas)
+          test -z "$(docker compose exec -T rabbitmq rabbitmq-plugins -q list -E)"
+          # na rede, só a porta AMQP; o clustering fica no localhost
+          docker compose exec -T rabbitmq rabbitmq-diagnostics -q listeners | tee /dev/stderr | grep -q '127.0.0.1, port: 25672'
+          test "$(docker compose exec -T rabbitmq rabbitmq-diagnostics -q listeners | grep -c 'Interface')" = 2
+          # mensagens mortas: nenhuma no fluxo normal
+          docker compose exec -T rabbitmq rabbitmqctl -q list_queues -p helpdesk name messages | grep -Eq '^notificacoes\.eventos\.dlq\s+0$'
       - name: Logs (em caso de falha)
         if: failure()
         run: docker compose logs --no-color
