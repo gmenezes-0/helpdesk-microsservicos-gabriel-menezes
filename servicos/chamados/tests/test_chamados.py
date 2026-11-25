@@ -1,21 +1,23 @@
 """Testes das regras de chamados (os mesmos do monólito, com Usuários e Inventário simulados)."""
 from datetime import datetime
 
+from tests.conftest import eventos_gravados
+
 
 def abrir(cliente, contas, ativo, quem="ana", prioridade="alta", **extra):
     dados = {"titulo": "PC não liga", "descricao": "Nada acontece", "prioridade": prioridade, "ativo_id": ativo["id"], **extra}
     return cliente.post("/chamados", headers=contas[quem]["headers"], json=dados)
 
 
-def test_abrir_calcula_sla_e_notifica(cliente, contas, ativo):
+def test_abrir_calcula_sla_e_notifica(cliente, sessao, contas, ativo):
     r = abrir(cliente, contas, ativo, prioridade="critica")
     assert r.status_code == 201
     c = r.json()
     assert c["solicitante_id"] == contas["ana"]["id"]
     horas = (datetime.fromisoformat(c["prazo_sla"]) - datetime.fromisoformat(c["criado_em"])).total_seconds() / 3600
     assert round(horas) == 4
-    avisos = cliente.get("/notificacoes", headers=contas["ana"]["headers"]).json()
-    assert avisos[0]["tipo"] == "ChamadoAberto"
+    [(tipo, dados)] = eventos_gravados(sessao)
+    assert tipo == "ChamadoAberto" and dados["destinatario_id"] == contas["ana"]["id"]
 
 
 def test_sla_de_cada_prioridade(cliente, contas, ativo):
@@ -38,12 +40,11 @@ def test_abrir_com_ativo_inexistente(cliente, contas, ativo):
     assert cliente.get("/chamados", headers=contas["carla"]["headers"]).json() == []  # nada foi gravado
 
 
-def test_atribuir_muda_status_e_avisa_tecnico(cliente, contas, ativo):
+def test_atribuir_muda_status_e_avisa_tecnico(cliente, sessao, contas, ativo):
     cid = abrir(cliente, contas, ativo).json()["id"]
     r = cliente.patch(f"/chamados/{cid}/atribuir", headers=contas["carla"]["headers"], json={"tecnico_id": contas["carla"]["id"]})
     assert r.json()["status"] == "em_atendimento" and r.json()["tecnico_id"] == contas["carla"]["id"]
-    avisos = cliente.get("/notificacoes", headers=contas["carla"]["headers"]).json()
-    assert avisos[0]["tipo"] == "ChamadoAtribuido"
+    assert eventos_gravados(sessao)[-1] == ("ChamadoAtribuido", {"chamado_id": cid, "destinatario_id": contas["carla"]["id"]})
 
 
 def test_so_tecnico_pode_ser_atribuido(cliente, contas, ativo):
@@ -67,13 +68,12 @@ def test_nao_atribui_chamado_resolvido(cliente, contas, ativo):
     assert r.status_code == 422
 
 
-def test_fluxo_completo_de_status(cliente, contas, ativo):
+def test_fluxo_completo_de_status(cliente, sessao, contas, ativo):
     cid = abrir(cliente, contas, ativo).json()["id"]
     tec = contas["carla"]["headers"]
     cliente.patch(f"/chamados/{cid}/atribuir", headers=tec, json={"tecnico_id": contas["carla"]["id"]})
     assert cliente.patch(f"/chamados/{cid}/status", headers=tec, json={"status": "resolvido"}).status_code == 200
-    avisos = cliente.get("/notificacoes", headers=contas["ana"]["headers"]).json()
-    assert avisos[-1]["tipo"] == "ChamadoResolvido"
+    assert eventos_gravados(sessao)[-1] == ("ChamadoResolvido", {"chamado_id": cid, "destinatario_id": contas["ana"]["id"]})
     # o próprio solicitante confirma e fecha
     r = cliente.patch(f"/chamados/{cid}/status", headers=contas["ana"]["headers"], json={"status": "fechado"})
     assert r.json()["status"] == "fechado"
@@ -157,12 +157,11 @@ def test_filtros_da_lista(cliente, contas, ativo):
 def test_dados_exemplo_criam_os_mesmos_chamados_do_monolito(sessao, rede):
     from app import dados_exemplo
     from app.chamados import repositorio
-    from app.notificacoes import servico as notificacoes
     with sessao() as db:
         dados_exemplo.carregar(db)
         dados_exemplo.carregar(db)  # na segunda vez, com o banco cheio, não cria de novo
         lista = [(c.id, c.solicitante_id, c.ativo_id, c.status, c.tecnico_id) for c in repositorio.listar(db)]
-        avisos = [(n.tipo, n.destinatario_id) for n in notificacoes.listar(db)]
+    avisos = [(tipo, dados["destinatario_id"]) for tipo, dados in eventos_gravados(sessao)]
     assert lista == [(1, 2, 1, "em_atendimento", 4), (2, 3, 2, "aberto", None), (3, 3, None, "aberto", None)]
     assert avisos == [("ChamadoAberto", 2), ("ChamadoAberto", 3), ("ChamadoAberto", 3), ("ChamadoAtribuido", 4)]
     assert rede.pedidos == []  # ao iniciar, nenhuma chamada HTTP

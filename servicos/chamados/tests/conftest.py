@@ -8,8 +8,11 @@ os.environ.pop("JWT_SEGREDO_ARQUIVO", None)
 os.environ["DADOS_EXEMPLO"] = "0"
 os.environ["USUARIOS_URL"] = "http://usuarios.teste"
 os.environ["INVENTARIO_URL"] = "http://inventario.teste"
+os.environ.pop("RABBITMQ_HOST", None)  # nenhum broker: os eventos ficam na caixa de saída
 
 from datetime import datetime, timedelta, timezone  # noqa: E402
+
+import json  # noqa: E402
 
 import httpx  # noqa: E402
 import jwt  # noqa: E402
@@ -39,6 +42,13 @@ def gerar_token(usuario_id, perfil, segredo: str | None = None, sem: tuple = (),
 
 def cabecalho(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
+
+
+def eventos_gravados(sessao) -> list[tuple[str, dict]]:
+    """(tipo, dados) de cada evento da caixa de saída, na ordem em que foram gravados."""
+    from app.eventos import servico
+    with sessao() as db:
+        return [(e.tipo, json.loads(e.conteudo)["dados"]) for e in servico.listar(db)]
 
 
 class RedeSimulada:

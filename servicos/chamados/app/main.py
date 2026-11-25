@@ -1,8 +1,9 @@
 """HelpDesk TI · serviço de Chamados.
 
-Dono dos chamados, comentários e notificações. Confere o token JWT localmente
-(mesmo segredo do serviço de Usuários) e consulta Usuários e Inventário por HTTP,
-com tempo limite, repassando o token de quem fez o pedido.
+Dono dos chamados e comentários. Confere o token JWT localmente (mesmo segredo
+do serviço de Usuários) e consulta Usuários e Inventário por HTTP, com tempo limite,
+repassando o token de quem fez o pedido. Os fatos que geram aviso viram eventos na
+caixa de saída, publicados no RabbitMQ por uma thread própria (app/eventos/).
 """
 import os
 from contextlib import asynccontextmanager
@@ -15,21 +16,38 @@ from sqlalchemy.orm import Session
 
 from app import clientes, dados_exemplo
 from app.chamados.rotas import router as chamados_router
-from app.config import DOCS_ATIVA, NOME_SERVICO, log
+from app.config import DOCS_ATIVA, NOME_SERVICO, RABBITMQ_HOST, log
 from app.database import Base, SessionLocal, engine, get_db
 from app.erros import NaoEncontrado, RegraDeNegocio, SemPermissao, ServicoIndisponivel
-from app.notificacoes.rotas import router as notificacoes_router
+from app.eventos import modelos as _modelos_eventos  # noqa: F401  (registra a tabela eventos_saida)
+from app.eventos.publicador import Publicador
 from app.seguranca_http import CabecalhosDeSeguranca
+
+
+publicador: Publicador | None = None
 
 
 @asynccontextmanager
 async def ciclo_de_vida(app: FastAPI):
-    """Cria as tabelas e, se pedido, os dados de exemplo ao iniciar; fecha as conexões HTTP ao parar."""
+    """Cria as tabelas e, se pedido, os dados de exemplo; liga o publicador de eventos.
+
+    Ao parar, encerra o publicador e as conexões HTTP. Sem RABBITMQ_HOST, os eventos
+    ficam guardados na caixa de saída até o publicador ser ligado.
+    """
+    global publicador
     Base.metadata.create_all(engine)
     if os.getenv("DADOS_EXEMPLO", "1") == "1":
         with SessionLocal() as db:
             dados_exemplo.carregar(db)
+    if RABBITMQ_HOST:
+        publicador = Publicador()
+        publicador.iniciar()
+    else:
+        log.warning("RABBITMQ_HOST não definido: os eventos ficam pendentes na caixa de saída.")
     yield
+    if publicador is not None:
+        publicador.parar()
+        publicador = None
     clientes.fechar()
 
 
@@ -41,7 +59,6 @@ app = FastAPI(
 app.add_middleware(CabecalhosDeSeguranca)
 
 app.include_router(chamados_router)
-app.include_router(notificacoes_router)
 
 
 @app.exception_handler(NaoEncontrado)

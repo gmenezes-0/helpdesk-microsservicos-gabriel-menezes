@@ -10,8 +10,7 @@ from app import config
 from tests.conftest import cabecalho, gerar_token
 
 ROTAS = [("get", "/chamados"), ("post", "/chamados"), ("get", "/chamados/painel"), ("get", "/chamados/1"),
-         ("patch", "/chamados/1/atribuir"), ("patch", "/chamados/1/status"), ("post", "/chamados/1/comentarios"),
-         ("get", "/notificacoes")]
+         ("patch", "/chamados/1/atribuir"), ("patch", "/chamados/1/status"), ("post", "/chamados/1/comentarios")]
 
 
 def test_rotas_exigem_login(cliente):

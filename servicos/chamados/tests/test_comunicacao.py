@@ -3,6 +3,7 @@ import httpx
 import pytest
 
 from app import clientes, config
+from tests.conftest import eventos_gravados
 
 ABRIR = {"titulo": "PC não liga", "descricao": "Nada acontece", "prioridade": "alta", "ativo_id": 1}
 FALHAS = ["timeout", "conexao", "500", "401", "json"]
@@ -73,7 +74,7 @@ def test_tecnico_inexistente_e_404(cliente, contas):
 # ---------- Inventário com problema ----------
 
 @pytest.mark.parametrize("falha", FALHAS)
-def test_inventario_com_problema_responde_503_sem_detalhes(cliente, contas, rede, falha):
+def test_inventario_com_problema_responde_503_sem_detalhes(cliente, sessao, contas, rede, falha):
     rede.falha["inventario.teste"] = falha
     r = abrir(cliente, contas)
     assert r.status_code == 503
@@ -81,16 +82,16 @@ def test_inventario_com_problema_responde_503_sem_detalhes(cliente, contas, rede
     for detalhe in ("inventario.teste", "timeout", "tempo esgotado", "recusada", "Internal", "html", "Traceback"):
         assert detalhe not in r.text
     assert cliente.get("/chamados", headers=contas["carla"]["headers"]).json() == []  # nada foi gravado
-    assert cliente.get("/notificacoes", headers=contas["ana"]["headers"]).json() == []
+    assert eventos_gravados(sessao) == []  # nem o evento
 
 
-def test_inventario_fora_nao_impede_o_resto(cliente, contas, rede):
+def test_inventario_fora_nao_impede_o_resto(cliente, sessao, contas, rede):
     rede.falha["inventario.teste"] = "conexao"
     sem_equipamento = {k: v for k, v in ABRIR.items() if k != "ativo_id"}
     assert cliente.post("/chamados", headers=contas["ana"]["headers"], json=sem_equipamento).status_code == 201
     assert len(cliente.get("/chamados", headers=contas["ana"]["headers"]).json()) == 1
     assert cliente.get("/chamados/painel", headers=contas["ana"]["headers"]).status_code == 200
-    assert cliente.get("/notificacoes", headers=contas["ana"]["headers"]).status_code == 200
+    assert [tipo for tipo, _ in eventos_gravados(sessao)] == ["ChamadoAberto"]
 
 
 # ---------- Usuários com problema ----------

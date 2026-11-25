@@ -18,6 +18,16 @@ INVENTARIO_URL = os.getenv("INVENTARIO_URL", "http://inventario:8000").rstrip("/
 # Tempo limite de cada chamada HTTP a outro serviço (segundos)
 HTTP_TIMEOUT_SEGUNDOS = float(os.getenv("HTTP_TIMEOUT_SEGUNDOS", "3"))
 
+# RabbitMQ. Sem RABBITMQ_HOST, o publicador não é iniciado e os eventos ficam na caixa de saída.
+# A senha nunca vem do ambiente: só do arquivo gerado pelo gerador de credenciais.
+RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "")
+RABBITMQ_PORTA = int(os.getenv("RABBITMQ_PORTA", "5672"))
+RABBITMQ_VHOST = os.getenv("RABBITMQ_VHOST", "helpdesk")
+RABBITMQ_USUARIO = os.getenv("RABBITMQ_USUARIO", "chamados")
+RABBITMQ_SENHA_ARQUIVO = os.getenv("RABBITMQ_SENHA_ARQUIVO", "/run/rabbitmq/senha")
+EXCHANGE_EVENTOS = "helpdesk.eventos"
+PUBLICADOR_INTERVALO_SEGUNDOS = float(os.getenv("PUBLICADOR_INTERVALO_SEGUNDOS", "1"))
+
 TAMANHO_MINIMO_SEGREDO = 32
 
 

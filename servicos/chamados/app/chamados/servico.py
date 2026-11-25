@@ -3,8 +3,10 @@
 No monólito, o técnico e o equipamento eram conferidos com chamadas de função
 para `usuarios.servico` e `inventario.servico`. Aqui são chamadas HTTP aos
 serviços de Usuários e Inventário (veja `app/clientes.py`), repassando o token
-de quem fez o pedido. As notificações continuam neste serviço, gravadas no
-mesmo banco dos chamados.
+de quem fez o pedido. As notificações viraram eventos (ChamadoAberto,
+ChamadoAtribuido, ChamadoResolvido): cada um é gravado na caixa de saída, na mesma
+transação do chamado, e publicado depois no RabbitMQ (veja `app/eventos/`).
+O serviço de Notificações consome esses eventos e grava os avisos no banco dele.
 
 Permissões:
 - solicitante: abre chamados e só vê, comenta e fecha os próprios;
@@ -21,7 +23,7 @@ from app.chamados import repositorio
 from app.chamados.esquemas import ChamadoCriar, ComentarioCriar
 from app.chamados.modelos import Chamado, Comentario
 from app.erros import NaoEncontrado, RegraDeNegocio, SemPermissao
-from app.notificacoes import servico as notificacoes
+from app.eventos import servico as eventos
 
 # Prazo para resolver o chamado, conforme a prioridade (SLA)
 HORAS_SLA = {"critica": 4, "alta": 8, "media": 24, "baixa": 72}
@@ -54,15 +56,15 @@ def abrir(db: Session, dados: ChamadoCriar, usuario: UsuarioToken) -> Chamado:
 def registrar_abertura(db: Session, dados: ChamadoCriar, solicitante_id: int) -> Chamado:
     """Grava o chamado já conferido e avisa o solicitante."""
     agora = datetime.now()
-    chamado = repositorio.salvar(db, Chamado(
+    chamado = Chamado(
         **dados.model_dump(), solicitante_id=solicitante_id, status="aberto", criado_em=agora,
         prazo_sla=calcular_prazo(dados.prioridade, agora),
-    ))
-    notificacoes.notificar(                                          # vira evento ChamadoAberto (bônus)
-        db, "ChamadoAberto", solicitante_id,
-        f"Seu chamado #{chamado.id} foi aberto. Prazo: {chamado.prazo_sla:%d/%m %H:%M}.",
     )
-    return chamado
+    db.add(chamado)
+    db.flush()  # gera o id do chamado, ainda dentro da transação
+    eventos.registrar(db, "ChamadoAberto", {
+        "chamado_id": chamado.id, "destinatario_id": solicitante_id, "prazo_sla": chamado.prazo_sla.isoformat()})
+    return repositorio.salvar(db, chamado)  # um único commit: chamado + evento
 
 
 def obter(db: Session, chamado_id: int, usuario: UsuarioToken) -> Chamado:
@@ -93,11 +95,8 @@ def registrar_atribuicao(db: Session, chamado: Chamado, tecnico_id: int) -> Cham
     chamado.tecnico_id = tecnico_id
     if chamado.status == "aberto":
         chamado.status = "em_atendimento"
-    repositorio.salvar(db, chamado)
-    notificacoes.notificar(                                          # vira evento ChamadoAtribuido (bônus)
-        db, "ChamadoAtribuido", tecnico_id, f"O chamado #{chamado.id} foi atribuído a você."
-    )
-    return chamado
+    eventos.registrar(db, "ChamadoAtribuido", {"chamado_id": chamado.id, "destinatario_id": tecnico_id})
+    return repositorio.salvar(db, chamado)  # um único commit: atribuição + evento
 
 
 def mudar_status(db: Session, chamado_id: int, novo_status: str, usuario: UsuarioToken) -> Chamado:
@@ -111,13 +110,9 @@ def mudar_status(db: Session, chamado_id: int, novo_status: str, usuario: Usuari
     if novo_status == "em_atendimento" and chamado.tecnico_id is None:
         raise RegraDeNegocio("Atribua um técnico antes de iniciar o atendimento.")
     chamado.status = novo_status
-    repositorio.salvar(db, chamado)
     if novo_status == "resolvido":
-        notificacoes.notificar(                                      # vira evento ChamadoResolvido (bônus)
-            db, "ChamadoResolvido", chamado.solicitante_id,
-            f"Seu chamado #{chamado.id} foi resolvido. Confirme se está tudo certo.",
-        )
-    return chamado
+        eventos.registrar(db, "ChamadoResolvido", {"chamado_id": chamado.id, "destinatario_id": chamado.solicitante_id})
+    return repositorio.salvar(db, chamado)  # um único commit: status + evento
 
 
 def comentar(db: Session, chamado_id: int, dados: ComentarioCriar, usuario: UsuarioToken) -> Comentario:

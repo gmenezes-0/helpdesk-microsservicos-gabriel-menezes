@@ -5,6 +5,7 @@ from sqlalchemy.exc import OperationalError
 from app import config
 from app.database import get_db
 from app.main import app
+from tests.conftest import eventos_gravados
 
 
 def abrir(cliente, h, **extra):
@@ -63,10 +64,14 @@ def test_nao_da_para_definir_status_ou_tecnico_ao_abrir(cliente, contas):
         assert abrir(cliente, contas["ana"]["headers"], **extra).status_code == 422, extra
 
 
-def test_notificacoes_sao_so_do_proprio_usuario(cliente, contas):
+def test_evento_do_chamado_vai_so_para_o_solicitante(cliente, sessao, contas):
     abrir(cliente, contas["ana"]["headers"])
-    assert cliente.get("/notificacoes", headers=contas["bia"]["headers"]).json() == []
-    assert len(cliente.get("/notificacoes", headers=contas["ana"]["headers"]).json()) == 1
+    assert [dados["destinatario_id"] for _, dados in eventos_gravados(sessao)] == [contas["ana"]["id"]]
+
+
+def test_rota_antiga_de_notificacoes_saiu_do_chamados(cliente, contas):
+    # agora é do serviço de Notificações (o gateway passa a encaminhar para lá)
+    assert cliente.get("/notificacoes", headers=contas["ana"]["headers"]).status_code == 404
 
 
 # ---------- entrada ----------
