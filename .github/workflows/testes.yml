@@ -6,8 +6,29 @@ permissions:
   contents: read
 
 jobs:
+  # Cada projeto é testado sozinho, com as suas próprias dependências
   testes:
+    name: Testes · ${{ matrix.projeto }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false          # a falha de um projeto não esconde o resultado dos outros
+      matrix:
+        include:
+          - projeto: monolito
+            pasta: .
+          - projeto: usuarios
+            pasta: servicos/usuarios
+          - projeto: inventario
+            pasta: servicos/inventario
+          - projeto: chamados
+            pasta: servicos/chamados
+          - projeto: gateway
+            pasta: gateway
+          - projeto: segredo-jwt
+            pasta: infra/segredo-jwt
+    defaults:
+      run:
+        working-directory: ${{ matrix.pasta }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -19,4 +40,42 @@ jobs:
       - name: Testes (inclui testes de segurança)
         run: pytest -q
       - name: Dependências com falhas conhecidas
-        run: pip-audit -r requirements.txt
+        run: |
+          if [ -f requirements.txt ]; then
+            pip-audit -r requirements.txt
+          else
+            echo "Sem dependências de execução (só a biblioteca padrão); auditando as de teste."
+            pip-audit -r requirements-dev.txt
+          fi
+
+  # Sobe o sistema inteiro como na entrega e confere o básico pelo gateway
+  compose:
+    name: Docker Compose
+    needs: testes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Configuração válida
+        run: docker compose config --quiet
+      - name: Subir tudo
+        run: docker compose up --build --detach --wait --wait-timeout 180
+      - name: Conferir pelo gateway
+        run: |
+          set -eu
+          curl -fsS http://127.0.0.1:8000/saude | tee /dev/stderr | grep -q '"status":"ok"'
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/chamados)" = 401
+          TOKEN=$(curl -fsS -X POST http://127.0.0.1:8000/auth/login -H 'Content-Type: application/json' \
+            -d '{"email":"carla@empresa.com","senha":"Helpdesk2026"}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+          curl -fsS http://127.0.0.1:8000/chamados -H "Authorization: Bearer $TOKEN" > /dev/null
+          curl -fsS http://127.0.0.1:8000/ativos -H "Authorization: Bearer $TOKEN" > /dev/null
+          # Só o gateway publica porta
+          test "$(docker compose ps --format '{{.Service}} {{.Ports}}' | grep -c -- '->')" = 1
+          docker compose ps --format '{{.Service}} {{.Ports}}' | grep -- '->' | grep -q '^gateway 127.0.0.1:8000->8000/tcp'
+      - name: Logs (em caso de falha)
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Desligar
+        if: always()
+        run: docker compose down --volumes

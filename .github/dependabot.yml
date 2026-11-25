@@ -1,14 +1,30 @@
 version: 2
 updates:
+  # Dependências Python de cada projeto (cada um tem o seu requirements.txt)
   - package-ecosystem: pip
-    directory: /
+    directories:
+      - /                      # monólito
+      - /servicos/usuarios
+      - /servicos/inventario
+      - /servicos/chamados
+      - /gateway
+      - /infra/segredo-jwt     # só dependências de teste
     schedule:
       interval: weekly
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+
+  # Imagem base (python:3.12-slim) de cada Dockerfile
   - package-ecosystem: docker
-    directory: /
+    directories:
+      - /
+      - /servicos/usuarios
+      - /servicos/inventario
+      - /servicos/chamados
+      - /gateway
+      - /infra/segredo-jwt
     schedule:
       interval: weekly
